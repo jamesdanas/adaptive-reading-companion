@@ -1,0 +1,8 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+adhd_reading.db
+attention_model.joblib
+attention_scaler.joblib
+.DS_Store
