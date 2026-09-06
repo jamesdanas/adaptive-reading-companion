@@ -114,7 +114,7 @@ if children:
 # 1. User Registration
 # ---------------------------------------------------------------------------
 if page == "1. User Registration":
-    st.header("1. User Registration")
+    st.header("User Registration")
     st.write("Register a learner. In production this would collect guardian consent too.")
 
     with st.form("register_form"):
@@ -140,7 +140,7 @@ if page == "1. User Registration":
     if submitted and name:
         child_id = db.add_child(name, age, grade, guardian_name, guardian_role)
         st.session_state.active_child_id = child_id
-        st.success(f"{name} registered! Go to '2. Early Screening' next.")
+        st.success(f"{name} registered! Go to 'Early Screening' next.")
         st.rerun()
 
     if children:
@@ -151,7 +151,7 @@ if page == "1. User Registration":
 # 2. Early Screening
 # ---------------------------------------------------------------------------
 elif page == "2. Early Screening":
-    st.header("2. Early Screening Module")
+    st.header("Early Screening Module")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
@@ -160,7 +160,7 @@ elif page == "2. Early Screening":
     child = db.get_child(st.session_state.active_child_id)
     st.write(f"Screening: **{child['name']}** ({child['grade']}, age {child['age']})")
 
-    st.markdown("#### Part A — Behavior checklist")
+    st.markdown("#### Part A: Behavior checklist")
     st.caption(
         "Answered by parent/teacher. Adapted from common inattention indicators — "
         "illustrative for this demo, not a validated clinical instrument."
@@ -185,7 +185,7 @@ elif page == "2. Early Screening":
     screening_score = sum(scores)
     st.info(f"Checklist score: **{screening_score} / 30**")
 
-    st.markdown("#### Part B — Attention task (reaction time)")
+    st.markdown("#### Part B: Attention task (reaction time)")
     st.caption(
         "The child clicks the button as soon as it turns red. "
         "We measure average speed and *consistency* — variability is a well-known attention proxy."
@@ -232,7 +232,7 @@ elif page == "2. Early Screening":
             st.session_state.game_stage = "idle"
             st.rerun()
 
-    st.markdown("#### Part C — Memory task (sequence recall)")
+    st.markdown("#### Part C: Memory task (sequence recall)")
     st.caption(
         "The child is shown a short sequence of icons, then recreates it from memory. "
         "Working memory is a second, well-documented cognitive domain linked to ADHD "
@@ -318,7 +318,7 @@ elif page == "2. Early Screening":
                 profile, confidence, settings,
             )
             reset_screening_state()
-            st.success("Screening saved. Go to '3. AI Decision Engine & Profile'.")
+            st.success("Screening saved. Go to 'AI Decision Engine & Profile'.")
     else:
         st.info("Complete both the attention task and the memory task above to continue.")
 
@@ -326,7 +326,7 @@ elif page == "2. Early Screening":
 # 3. AI Decision Engine & Learner Profile
 # ---------------------------------------------------------------------------
 elif page == "3. AI Decision Engine & Profile":
-    st.header("3. AI Decision Engine → 4. Learner Profile Creation")
+    st.header("AI Decision Engine & Learner Profile Creation")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
@@ -336,7 +336,7 @@ elif page == "3. AI Decision Engine & Profile":
     latest = db.get_latest_screening(child["id"])
 
     if not latest:
-        st.warning("No screening on file yet. Complete '2. Early Screening' first.")
+        st.warning("No screening on file yet. Complete 'Early Screening' first.")
         st.stop()
 
     c1, c2, c3, c4 = st.columns(4)
@@ -376,7 +376,7 @@ elif page == "3. AI Decision Engine & Profile":
 # 5. Personalized Reading + Adaptive Learning Module
 # ---------------------------------------------------------------------------
 elif page == "4. Personalized Reading + Adaptive Module":
-    st.header("5. Personalized Reading Content + 6. Adaptive Learning Module")
+    st.header("Personalized Reading Content & Adaptive Learning Module")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
@@ -453,7 +453,7 @@ elif page == "4. Personalized Reading + Adaptive Module":
             st.info("⏸️ Adaptive break: take 15 seconds, then continue whenever ready.")
             st.session_state["_show_break"] = False
     else:
-        st.success("Passage complete! Go to '5. Reading Assessment' to check comprehension.")
+        st.success("Passage complete! Go to 'Reading Assessment' to check comprehension.")
         if st.button("🔁 Read a different passage"):
             reset_reading_state()
             st.rerun()
@@ -501,7 +501,7 @@ elif page == "5. Reading Assessment":
 # 6. Progress Monitoring
 # ---------------------------------------------------------------------------
 elif page == "6. Progress Monitoring":
-    st.header("8. Progress Monitoring")
+    st.header("Progress Monitoring")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
@@ -516,23 +516,34 @@ elif page == "6. Progress Monitoring":
 
     df = pd.DataFrame(sessions)
     df["created_at"] = pd.to_datetime(df["created_at"])
+    df = df.sort_values("created_at").reset_index(drop=True)
+    df["session_number"] = range(1, len(df) + 1)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Comprehension score over time")
-        st.line_chart(df.set_index("created_at")["quiz_score"])
-    with col2:
-        st.subheader("Avg time per chunk (engagement proxy)")
-        st.line_chart(df.set_index("created_at")["avg_time_per_chunk"])
+    if len(df) < 2:
+        st.info(
+            "Only one session logged so far — trend charts need at least 2 sessions "
+            "to show a line. Here's the session on file:"
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Comprehension score", f"{df['quiz_score'].iloc[0]:.0f}%")
+        c2.metric("Avg time per chunk", f"{df['avg_time_per_chunk'].iloc[0]:.1f}s")
+        c3.metric("Breaks triggered", int(df["breaks_triggered"].iloc[0]))
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Comprehension score over time")
+            st.line_chart(df.set_index("session_number")["quiz_score"])
+        with col2:
+            st.subheader("Avg time per chunk (engagement proxy)")
+            st.line_chart(df.set_index("session_number")["avg_time_per_chunk"])
 
     st.subheader("Session log")
     st.dataframe(df[["created_at", "passage_title", "quiz_score", "avg_time_per_chunk", "breaks_triggered"]])
-
 # ---------------------------------------------------------------------------
 # 7. AI Recommendations
 # ---------------------------------------------------------------------------
 elif page == "7. AI Recommendations":
-    st.header("9. AI Recommendations")
+    st.header("AI Recommendations")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
@@ -576,7 +587,7 @@ elif page == "7. AI Recommendations":
 # 8. Teacher & Parent Dashboard
 # ---------------------------------------------------------------------------
 elif page == "8. Teacher & Parent Dashboard":
-    st.header("10. Teacher & Parent Dashboard")
+    st.header("Teacher & Parent Dashboard")
 
     if not children:
         st.info("No learners registered yet.")
@@ -593,17 +604,22 @@ elif page == "8. Teacher & Parent Dashboard":
                 st.write("No screening completed yet.")
             if sessions:
                 df = pd.DataFrame(sessions)
+                df["created_at"] = pd.to_datetime(df["created_at"])
+                df = df.sort_values("created_at").reset_index(drop=True)
                 st.write(f"**Sessions logged:** {len(df)} · "
-                         f"**Avg score:** {df['quiz_score'].mean():.0f}%")
-                st.line_chart(df.set_index(pd.to_datetime(df["created_at"]))["quiz_score"])
+                        f"**Avg score:** {df['quiz_score'].mean():.0f}%")
+                if len(df) < 2:
+                    st.caption(f"Latest score: {df['quiz_score'].iloc[-1]:.0f}% (need 2+ sessions for a trend line)")
+                else:
+                    df["session_number"] = range(1, len(df) + 1)
+                    st.line_chart(df.set_index("session_number")["quiz_score"])
             else:
                 st.write("No reading sessions yet.")
-
 # ---------------------------------------------------------------------------
 # 9. Reports
 # ---------------------------------------------------------------------------
 elif page == "9. Reports":
-    st.header("11. Reports")
+    st.header("Reports")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
