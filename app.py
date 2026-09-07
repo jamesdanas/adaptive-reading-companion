@@ -12,10 +12,9 @@ clinical tool, and the training data is synthetic. State this plainly
 during the defense -- it is a strength (transparent, reproducible,
 honest about scope) not a weakness.
 """
+import concurrent.futures
 import io
-import os
 import random
-import tempfile
 import time
 
 import pandas as pd
@@ -26,8 +25,16 @@ import ml_engine
 from content import get_passages_for_grade
 
 st.set_page_config(page_title="Adaptive Reading Companion", layout="wide", page_icon="📖")
-db.init_db()
-db.seed_demo_data()
+
+
+@st.cache_resource(show_spinner=False)
+def _init_app_once():
+    db.init_db()
+    db.seed_demo_data()
+    return True
+
+
+_init_app_once()
 
 # ---------------------------------------------------------------------------
 # Session state defaults
@@ -48,6 +55,7 @@ defaults = {
     "chunk_times": [],
     "breaks_triggered": 0,
     "current_passage": None,
+    "chunk_audio": [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -72,13 +80,18 @@ def reset_reading_state():
     st.session_state.chunk_times = []
     st.session_state.breaks_triggered = 0
     st.session_state.current_passage = None
+    st.session_state.chunk_audio = []
 
 
 # ---------------------------------------------------------------------------
 # Sidebar navigation
 # ---------------------------------------------------------------------------
-st.sidebar.title("📖 Adaptive Reading Companion")
-st.sidebar.caption("MSc demo — AI-driven early screening & personalized reading")
+st.sidebar.title("Adaptive Reading Companion")
+st.sidebar.caption("AI-driven early screening & personalized reading")
+st.sidebar.markdown(
+    "**Malakai Wasossin Naomi**  \n"
+    "(UJ/2024/PGED/0167)"
+)
 
 children = db.list_children()
 child_names = {c["id"]: f"{c['name']} ({c['grade']})" for c in children}
@@ -108,6 +121,10 @@ if children:
         if st.session_state.active_child_id in child_names
         else 0,
     )
+    if st.session_state.get("_last_active_child_id") != selected:
+        reset_reading_state()
+        reset_screening_state()
+        st.session_state["_last_active_child_id"] = selected
     st.session_state.active_child_id = selected
 
 # ---------------------------------------------------------------------------
@@ -201,7 +218,7 @@ elif page == "2. Early Screening":
                 st.rerun()
 
         elif st.session_state.game_stage == "waiting":
-            delay = random.uniform(1.2, 3.0)
+            delay = random.uniform(1.0, 2.2)
             with st.spinner("Wait for it..."):
                 time.sleep(delay)
             st.session_state.ready_time = time.time()
@@ -217,7 +234,7 @@ elif page == "2. Early Screening":
                 st.rerun()
 
         st.caption("Having trouble with the timing? You can skip this and use typical values instead:")
-        if st.button("⏭️ Skip live test (use typical calibration)", key=f"skip_{st.session_state.rt_round}"):
+        if st.button("Skip live test (use typical calibration)", key=f"skip_{st.session_state.rt_round}"):
             st.session_state.rt_times = [550, 580, 520, 610, 540]
             st.session_state.rt_round = ROUNDS
             st.session_state.game_stage = "idle"
@@ -261,7 +278,7 @@ elif page == "2. Early Screening":
                 unsafe_allow_html=True,
             )
             with st.spinner("Memorize this sequence..."):
-                time.sleep(1.5 + 0.6 * length)
+                time.sleep(1.2 + 0.45 * length)
             st.session_state.mem_stage = "recall"
             st.rerun()
 
@@ -288,7 +305,7 @@ elif page == "2. Early Screening":
                 st.rerun()
 
         st.caption("Having trouble? Skip and use typical values instead:")
-        if st.button("⏭️ Skip memory task (use typical calibration)", key="mem_skip"):
+        if st.button("Skip memory task (use typical calibration)", key="mem_skip"):
             st.session_state.mem_correct = [True, True, False]
             st.session_state.mem_round = MEM_ROUNDS
             st.session_state.mem_stage = "idle"
@@ -309,7 +326,7 @@ elif page == "2. Early Screening":
         memory_score = sum(st.session_state.mem_correct) / MEM_ROUNDS
 
         st.divider()
-        if st.button("➡️ Submit screening & run AI Decision Engine", type="primary"):
+        if st.button("Submit screening & run AI Decision Engine", type="primary"):
             profile, confidence, settings = ml_engine.predict_profile(
                 screening_score, avg_rt, rt_var, memory_score, child["age"]
             )
@@ -345,7 +362,7 @@ elif page == "3. AI Decision Engine & Profile":
     c3.metric("Reaction variability", f"{latest['reaction_variability']:.0f} ms")
     c4.metric("Memory score", f"{(latest['memory_score'] or 0)*100:.0f}%")
 
-    st.subheader(f"🧠 Predicted attention profile: **{latest['attention_profile']}**")
+    st.subheader(f"Predicted attention profile: **{latest['attention_profile']}**")
     st.caption(
         f"Screening indicator: **{latest['settings'].get('indicative_level', 'n/a')}** "
         "— a screening signal to guide content adaptation, not a diagnosis."
@@ -373,7 +390,7 @@ elif page == "3. AI Decision Engine & Profile":
     )
 
 # ---------------------------------------------------------------------------
-# 5. Personalized Reading + Adaptive Learning Module
+# 4. Personalized Reading + Adaptive Learning Module
 # ---------------------------------------------------------------------------
 elif page == "4. Personalized Reading + Adaptive Module":
     st.header("Personalized Reading Content & Adaptive Learning Module")
@@ -391,14 +408,40 @@ elif page == "4. Personalized Reading + Adaptive Module":
     settings = latest["settings"]
     passages = get_passages_for_grade(child["grade"])
 
+    @st.cache_data(show_spinner=False)
+    def generate_audio(text: str) -> bytes:
+        from gtts import gTTS
+        tts = gTTS(text, timeout=6)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        return buf.getvalue()
+
+    def _safe_generate_audio(text: str):
+        try:
+            return generate_audio(text)
+        except Exception:
+            return None
+
     if st.session_state.current_passage is None:
         titles = [p["title"] for p in passages]
         choice = st.selectbox("Choose a passage", titles)
         if st.button("Start reading session", type="primary"):
-            st.session_state.current_passage = next(p for p in passages if p["title"] == choice)
+            chosen_passage = next(p for p in passages if p["title"] == choice)
             reset_reading_state()
-            st.session_state.current_passage = next(p for p in passages if p["title"] == choice)
+            st.session_state.current_passage = chosen_passage
             st.session_state.chunk_start_time = time.time()
+
+            if settings["use_audio"]:
+                chunk_size = settings["chunk_sentences"]
+                sentences = chosen_passage["sentences"]
+                chunks = [sentences[i:i + chunk_size] for i in range(0, len(sentences), chunk_size)]
+                chunk_texts = [" ".join(c) for c in chunks]
+
+                with st.spinner("Preparing narration for this passage..."):
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+                        audio_list = list(executor.map(_safe_generate_audio, chunk_texts))
+                    st.session_state.chunk_audio = audio_list
+
             st.rerun()
         st.stop()
 
@@ -424,18 +467,15 @@ elif page == "4. Personalized Reading + Adaptive Module":
         )
 
         if settings["use_audio"]:
-            try:
-                from gtts import gTTS
-                tts = gTTS(chunk_text)
-                buf = io.BytesIO()
-                tts.write_to_fp(buf)
-                st.audio(buf.getvalue(), format="audio/mp3")
-            except Exception:
-                st.caption("🔇 Audio narration unavailable right now (needs internet) — text-only mode.")
+            cached_audio = st.session_state.get("chunk_audio", [])
+            if idx < len(cached_audio) and cached_audio[idx]:
+                st.audio(cached_audio[idx], format="audio/mp3")
+            else:
+                st.caption("🔇 Audio narration unavailable for this chunk — text-only mode.")
 
         st.caption(f"Chunk {idx + 1} of {len(chunks)}")
 
-        if st.button("Next ➡️"):
+        if st.button("Next"):
             elapsed = time.time() - (st.session_state.chunk_start_time or time.time())
             st.session_state.chunk_times.append(elapsed)
 
@@ -450,11 +490,11 @@ elif page == "4. Personalized Reading + Adaptive Module":
             st.rerun()
 
         if (idx + 1) % settings["break_every_chunks"] == 0 or st.session_state.get("_show_break"):
-            st.info("⏸️ Adaptive break: take 15 seconds, then continue whenever ready.")
+            st.info("Adaptive break: take 15 seconds, then continue whenever ready.")
             st.session_state["_show_break"] = False
     else:
         st.success("Passage complete! Go to 'Reading Assessment' to check comprehension.")
-        if st.button("🔁 Read a different passage"):
+        if st.button("Read a different passage"):
             reset_reading_state()
             st.rerun()
 
@@ -462,7 +502,7 @@ elif page == "4. Personalized Reading + Adaptive Module":
 # 5. Reading Assessment
 # ---------------------------------------------------------------------------
 elif page == "5. Reading Assessment":
-    st.header("7. Reading Assessment")
+    st.header("Reading Assessment")
 
     if not st.session_state.active_child_id:
         st.warning("Register or select a learner first.")
@@ -539,6 +579,7 @@ elif page == "6. Progress Monitoring":
 
     st.subheader("Session log")
     st.dataframe(df[["created_at", "passage_title", "quiz_score", "avg_time_per_chunk", "breaks_triggered"]])
+
 # ---------------------------------------------------------------------------
 # 7. AI Recommendations
 # ---------------------------------------------------------------------------
@@ -572,16 +613,16 @@ elif page == "7. AI Recommendations":
     st.subheader("Recommendation")
     if avg_score < 50 or avg_breaks >= 2:
         st.warning(
-            "📉 Reduce difficulty: shorter passages, smaller chunks, and more frequent "
+            "Reduce difficulty: shorter passages, smaller chunks, and more frequent "
             "breaks recommended for the next sessions."
         )
     elif avg_score >= 80 and trend >= 0:
         st.success(
-            "📈 Learner is thriving: increase passage length slightly and/or move to the "
-            "increase passage length slightly and/or move to the next reading level."
+            "Learner is thriving: increase passage length slightly and/or move to "
+            "the next reading level."
         )
     else:
-        st.info("➡️ Maintain current profile settings; performance is stable.")
+        st.info("Maintain current profile settings; performance is stable.")
 
 # ---------------------------------------------------------------------------
 # 8. Teacher & Parent Dashboard
@@ -615,6 +656,7 @@ elif page == "8. Teacher & Parent Dashboard":
                     st.line_chart(df.set_index("session_number")["quiz_score"])
             else:
                 st.write("No reading sessions yet.")
+
 # ---------------------------------------------------------------------------
 # 9. Reports
 # ---------------------------------------------------------------------------
@@ -636,6 +678,6 @@ elif page == "9. Reports":
         df = pd.DataFrame(sessions)
         st.dataframe(df)
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download CSV report", csv, file_name=f"{child['name']}_report.csv")
+        st.download_button("Download CSV report", csv, file_name=f"{child['name']}_report.csv")
     else:
         st.info("No session data to report yet.")
