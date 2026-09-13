@@ -39,8 +39,21 @@ _init_app_once()
 # ---------------------------------------------------------------------------
 # Session state defaults
 # ---------------------------------------------------------------------------
+STAGES = [
+    "1. User Registration",
+    "2. Early Screening",
+    "3. AI Decision Engine & Profile",
+    "4. Personalized Reading + Adaptive Module",
+    "5. Reading Assessment",
+    "6. Progress Monitoring",
+    "7. AI Recommendations",
+    "8. Teacher & Parent Dashboard",
+    "9. Reports",
+]
+
 defaults = {
     "active_child_id": None,
+    "current_stage": STAGES[0],
     "rt_round": 0,
     "rt_times": [],
     "game_stage": "idle",
@@ -84,7 +97,7 @@ def reset_reading_state():
 
 
 # ---------------------------------------------------------------------------
-# Sidebar navigation
+# Sidebar: identity
 # ---------------------------------------------------------------------------
 st.sidebar.title("Adaptive Reading Companion")
 st.sidebar.caption("AI-driven early screening & personalized reading")
@@ -92,28 +105,40 @@ st.sidebar.markdown(
     "**Malakai Wasossin Naomi**  \n"
     "(UJ/2024/PGED/0167)"
 )
+st.sidebar.divider()
 
+# ---------------------------------------------------------------------------
+# Sidebar: compact pipeline navigation (Previous / current / Next)
+# ---------------------------------------------------------------------------
+stage_idx = STAGES.index(st.session_state.current_stage)
+
+st.sidebar.caption("Pipeline Stage")
+st.sidebar.caption(f"Stage {stage_idx + 1} of {len(STAGES)}")
+st.sidebar.progress((stage_idx + 1) / len(STAGES))
+
+nav_prev, nav_next = st.sidebar.columns(2)
+with nav_prev:
+    if st.button("◀ Prev", disabled=(stage_idx == 0), use_container_width=True):
+        st.session_state.current_stage = STAGES[stage_idx - 1]
+        st.rerun()
+with nav_next:
+    if st.button("Next ▶", disabled=(stage_idx == len(STAGES) - 1), use_container_width=True):
+        st.session_state.current_stage = STAGES[stage_idx + 1]
+        st.rerun()
+
+selected_stage = st.sidebar.selectbox("Jump to stage", STAGES, index=stage_idx)
+st.session_state.current_stage = selected_stage
+page = selected_stage
+
+# ---------------------------------------------------------------------------
+# Sidebar: active learner
+# ---------------------------------------------------------------------------
 children = db.list_children()
 child_names = {c["id"]: f"{c['name']} ({c['grade']})" for c in children}
 
-page = st.sidebar.radio(
-    "Pipeline stage",
-    [
-        "1. User Registration",
-        "2. Early Screening",
-        "3. AI Decision Engine & Profile",
-        "4. Personalized Reading + Adaptive Module",
-        "5. Reading Assessment",
-        "6. Progress Monitoring",
-        "7. AI Recommendations",
-        "8. Teacher & Parent Dashboard",
-        "9. Reports",
-    ],
-)
-
 if children:
     st.sidebar.divider()
-    selected = st.sidebar.selectbox(
+    active_selected = st.sidebar.selectbox(
         "Active learner",
         options=list(child_names.keys()),
         format_func=lambda x: child_names[x],
@@ -121,11 +146,11 @@ if children:
         if st.session_state.active_child_id in child_names
         else 0,
     )
-    if st.session_state.get("_last_active_child_id") != selected:
+    if st.session_state.get("_last_active_child_id") != active_selected:
         reset_reading_state()
         reset_screening_state()
-        st.session_state["_last_active_child_id"] = selected
-    st.session_state.active_child_id = selected
+        st.session_state["_last_active_child_id"] = active_selected
+    st.session_state.active_child_id = active_selected
 
 # ---------------------------------------------------------------------------
 # 1. User Registration
@@ -157,7 +182,8 @@ if page == "1. User Registration":
     if submitted and name:
         child_id = db.add_child(name, age, grade, guardian_name, guardian_role)
         st.session_state.active_child_id = child_id
-        st.success(f"{name} registered! Go to 'Early Screening' next.")
+        st.session_state.current_stage = "2. Early Screening"
+        st.success(f"{name} registered! Moving to Early Screening.")
         st.rerun()
 
     if children:
@@ -335,7 +361,9 @@ elif page == "2. Early Screening":
                 profile, confidence, settings,
             )
             reset_screening_state()
-            st.success("Screening saved. Go to 'AI Decision Engine & Profile'.")
+            st.session_state.current_stage = "3. AI Decision Engine & Profile"
+            st.success("Screening saved. Moving to AI Decision Engine & Profile.")
+            st.rerun()
     else:
         st.info("Complete both the attention task and the memory task above to continue.")
 
@@ -411,7 +439,11 @@ elif page == "4. Personalized Reading + Adaptive Module":
     @st.cache_data(show_spinner=False)
     def generate_audio(text: str) -> bytes:
         from gtts import gTTS
-        tts = gTTS(text, timeout=6)
+        # Nigerian English accent (en / com.ng is an officially supported gTTS
+        # locale), slow=True for a calmer, lower-tempo pace suited to the
+        # target audience, and a timeout so a stalled request fails fast
+        # instead of hanging the whole page.
+        tts = gTTS(text, lang="en", tld="com.ng", slow=True, timeout=6)
         buf = io.BytesIO()
         tts.write_to_fp(buf)
         return buf.getvalue()
@@ -494,9 +526,15 @@ elif page == "4. Personalized Reading + Adaptive Module":
             st.session_state["_show_break"] = False
     else:
         st.success("Passage complete! Go to 'Reading Assessment' to check comprehension.")
-        if st.button("Read a different passage"):
-            reset_reading_state()
-            st.rerun()
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("Read a different passage"):
+                reset_reading_state()
+                st.rerun()
+        with col_b:
+            if st.button("Go to Reading Assessment", type="primary"):
+                st.session_state.current_stage = "5. Reading Assessment"
+                st.rerun()
 
 # ---------------------------------------------------------------------------
 # 5. Reading Assessment
