@@ -1,5 +1,6 @@
 """
 content.py
+----------------------------------------------------------------------------
 A small bank of sample passages for the demo. In a real system this
 would be a much larger, curriculum-aligned content library. Each passage
 is pre-split into sentences so the adaptive engine can chunk it dynamically.
