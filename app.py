@@ -8,9 +8,7 @@ Run with:  streamlit run app.py
 This is a SEMINAR/DEFENSE DEMO, not a clinical or production system.
 Every "AI" stage is real and runs live (an MLPClassifier trained at
 startup), but the screening instrument is illustrative, not a validated
-clinical tool, and the training data is synthetic. State this plainly
-during the defense -- it is a strength (transparent, reproducible,
-honest about scope) not a weakness.
+clinical tool, and the training data is synthetic.
 """
 import concurrent.futures
 import io
@@ -26,13 +24,11 @@ from content import get_passages_for_grade
 
 st.set_page_config(page_title="Adaptive Reading Companion", layout="wide", page_icon="📖")
 
-
 @st.cache_resource(show_spinner=False)
 def _init_app_once():
     db.init_db()
     db.seed_demo_data()
     return True
-
 
 _init_app_once()
 
@@ -74,6 +70,10 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# Apply any programmatic "jump to stage" request BEFORE the keyed
+# selectbox below is instantiated.
+if "_pending_stage" in st.session_state:
+    st.session_state["current_stage"] = st.session_state.pop("_pending_stage")
 
 def reset_screening_state():
     st.session_state.rt_round = 0
@@ -86,7 +86,6 @@ def reset_screening_state():
     st.session_state.mem_sequence = []
     st.session_state.mem_user_sequence = []
 
-
 def reset_reading_state():
     st.session_state.reading_chunk_idx = 0
     st.session_state.chunk_start_time = None
@@ -95,6 +94,13 @@ def reset_reading_state():
     st.session_state.current_passage = None
     st.session_state.chunk_audio = []
 
+def goto_stage(stage_name: str):
+    """Request a stage change. Always use this instead of writing
+    st.session_state.current_stage directly from page-body code -- that
+    runs AFTER the keyed sidebar widget has already rendered this pass,
+    and Streamlit forbids mutating a keyed widget's value after it has
+    been instantiated in the same run."""
+    st.session_state["_pending_stage"] = stage_name
 
 # ---------------------------------------------------------------------------
 # Sidebar: identity
@@ -103,7 +109,8 @@ st.sidebar.title("Adaptive Reading Companion")
 st.sidebar.caption("AI-driven early screening & personalized reading")
 st.sidebar.markdown(
     "**Malakai Wasossin Naomi**  \n"
-    "(UJ/2024/PGED/0167)"
+    "B.Sc(Edu)  \n"
+    "UJ/2024/PGED/0167"
 )
 st.sidebar.divider()
 
@@ -119,15 +126,18 @@ st.sidebar.progress((stage_idx + 1) / len(STAGES))
 nav_prev, nav_next = st.sidebar.columns(2)
 with nav_prev:
     if st.button("◀ Prev", disabled=(stage_idx == 0), use_container_width=True):
-        st.session_state.current_stage = STAGES[stage_idx - 1]
+        goto_stage(STAGES[stage_idx - 1])
         st.rerun()
 with nav_next:
     if st.button("Next ▶", disabled=(stage_idx == len(STAGES) - 1), use_container_width=True):
-        st.session_state.current_stage = STAGES[stage_idx + 1]
+        goto_stage(STAGES[stage_idx + 1])
         st.rerun()
 
-selected_stage = st.sidebar.selectbox("Jump to stage", STAGES, index=stage_idx)
-st.session_state.current_stage = selected_stage
+# Keyed to "current_stage" so this widget IS the single source of truth
+# for the sidebar's notion of the current stage -- no index= needed (and
+# none allowed once a widget has a key), because the value above already
+# synced from any pending jump before this widget was created.
+selected_stage = st.sidebar.selectbox("Jump to stage", STAGES, key="current_stage")
 page = selected_stage
 
 # ---------------------------------------------------------------------------
@@ -182,8 +192,8 @@ if page == "1. User Registration":
     if submitted and name:
         child_id = db.add_child(name, age, grade, guardian_name, guardian_role)
         st.session_state.active_child_id = child_id
-        st.session_state.current_stage = "2. Early Screening"
         st.success(f"{name} registered! Moving to Early Screening.")
+        goto_stage("2. Early Screening")
         st.rerun()
 
     if children:
@@ -361,8 +371,8 @@ elif page == "2. Early Screening":
                 profile, confidence, settings,
             )
             reset_screening_state()
-            st.session_state.current_stage = "3. AI Decision Engine & Profile"
             st.success("Screening saved. Moving to AI Decision Engine & Profile.")
+            goto_stage("3. AI Decision Engine & Profile")
             st.rerun()
     else:
         st.info("Complete both the attention task and the memory task above to continue.")
@@ -511,8 +521,7 @@ elif page == "4. Personalized Reading + Adaptive Module":
             elapsed = time.time() - (st.session_state.chunk_start_time or time.time())
             st.session_state.chunk_times.append(elapsed)
 
-            # Adaptive Learning Module: if this chunk took a long time,
-            # treat it as a disengagement signal and insert a break.
+            # Adaptive Learning Module
             if elapsed > 25:
                 st.session_state.breaks_triggered += 1
                 st.session_state["_show_break"] = True
@@ -533,7 +542,7 @@ elif page == "4. Personalized Reading + Adaptive Module":
                 st.rerun()
         with col_b:
             if st.button("Go to Reading Assessment", type="primary"):
-                st.session_state.current_stage = "5. Reading Assessment"
+                goto_stage("5. Reading Assessment")
                 st.rerun()
 
 # ---------------------------------------------------------------------------
